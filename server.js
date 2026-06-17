@@ -11,10 +11,28 @@ dotenv.config();
 
 const app = express();
 
-// Serve uploads static directory
+/* =========================================
+   ENV CONFIG
+========================================= */
+const PORT = process.env.PORT || 5000;
+const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
+
+/* =========================================
+   MIDDLEWARE
+========================================= */
+
+// CORS (frontend connection)
+app.use(cors());
+
+app.use(express.json());
+
+// Serve uploads folder
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Multer Disk Storage setup
+/* =========================================
+   MULTER SETUP
+========================================= */
+
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         const uploadPath = path.join(__dirname, 'uploads');
@@ -28,57 +46,59 @@ const storage = multer.diskStorage({
         cb(null, uniqueSuffix + path.extname(file.originalname));
     }
 });
-const upload = multer({ storage: storage });
 
-// Metadata storage helper functions
+const upload = multer({ storage });
+
+/* =========================================
+   GALLERY STORAGE (JSON FILE)
+========================================= */
+
 const galleryFile = path.join(__dirname, 'gallery.json');
+
 function getGalleryData() {
-    if (!fs.existsSync(galleryFile)) {
-        return [];
-    }
+    if (!fs.existsSync(galleryFile)) return [];
     try {
         return JSON.parse(fs.readFileSync(galleryFile, 'utf8'));
-    } catch (err) {
+    } catch {
         return [];
     }
 }
+
 function saveGalleryData(data) {
-    fs.writeFileSync(galleryFile, JSON.stringify(data, null, 2), 'utf8');
+    fs.writeFileSync(galleryFile, JSON.stringify(data, null, 2));
 }
 
-// Middleware
-app.use(cors());
-app.use(express.json());
+/* =========================================
+   EMAIL TRANSPORTER
+========================================= */
 
-// Email configuration
 const transporter = nodemailer.createTransport({
-    service: process.env.EMAIL_SERVICE || 'gmail',
+    service: 'gmail',
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASSWORD
     }
 });
 
-// ============================================
-// ROUTES
-// ============================================
+/* =========================================
+   ROUTES
+========================================= */
 
 // Health check
 app.get('/api/health', (req, res) => {
     res.json({ status: 'Server is running' });
 });
 
-// ============================================
-// GALLERY ROUTES
-// ============================================
+/* =========================================
+   GALLERY ROUTES
+========================================= */
 
-// GET all gallery photos
+// GET gallery
 app.get('/api/gallery', (req, res) => {
-    const data = getGalleryData();
-    res.json(data);
+    res.json(getGalleryData());
 });
 
-// POST upload a new photo
+// UPLOAD image
 app.post('/api/gallery/upload', upload.single('photo'), (req, res) => {
     try {
         if (!req.file) {
@@ -88,15 +108,15 @@ app.post('/api/gallery/upload', upload.single('photo'), (req, res) => {
         const { title, category, description } = req.body;
 
         if (!title || !category) {
-            return res.status(400).json({ message: 'Title and category are required' });
+            return res.status(400).json({ message: 'Title and category required' });
         }
 
         const newPhoto = {
             id: 'c_' + Date.now(),
             title: title.trim(),
             description: (description || '').trim(),
-            category: category,
-            image: `http://localhost:${process.env.PORT || 5000}/uploads/${req.file.filename}`,
+            category,
+            image: `${BASE_URL}/uploads/${req.file.filename}`,
             date: new Date().toISOString().split('T')[0]
         };
 
@@ -105,53 +125,56 @@ app.post('/api/gallery/upload', upload.single('photo'), (req, res) => {
         saveGalleryData(data);
 
         res.json({ success: true, photo: newPhoto });
-    } catch (error) {
-        console.error('Upload error:', error);
+
+    } catch (err) {
+        console.error(err);
         res.status(500).json({ message: 'Upload failed' });
     }
 });
 
-// DELETE a gallery photo by ID
+// DELETE image
 app.delete('/api/gallery/:id', (req, res) => {
     try {
         const { id } = req.params;
         let data = getGalleryData();
-        const photoIndex = data.findIndex(p => p.id === id);
 
-        if (photoIndex === -1) {
+        const index = data.findIndex(p => p.id === id);
+        if (index === -1) {
             return res.status(404).json({ message: 'Photo not found' });
         }
 
-        // Delete physical file if it exists locally
-        const photo = data[photoIndex];
-        if (photo.image && photo.image.includes('/uploads/')) {
+        const photo = data[index];
+
+        // delete file
+        if (photo.image) {
             const filename = photo.image.split('/uploads/')[1];
             const filePath = path.join(__dirname, 'uploads', filename);
-            if (fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath);
-            }
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
         }
 
-        data.splice(photoIndex, 1);
+        data.splice(index, 1);
         saveGalleryData(data);
 
-        res.json({ success: true, message: 'Photo deleted' });
-    } catch (error) {
-        console.error('Delete error:', error);
+        res.json({ success: true, message: 'Deleted' });
+
+    } catch (err) {
+        console.error(err);
         res.status(500).json({ message: 'Delete failed' });
     }
 });
 
+/* =========================================
+   BOOKING ROUTE
+========================================= */
 
-app.post('/api/bookings', 
-    body('name').notEmpty().trim(),
+app.post('/api/bookings',
+    body('name').notEmpty(),
     body('email').isEmail(),
-    body('phone').notEmpty().trim(),
+    body('phone').notEmpty(),
     body('travelers').isInt({ min: 1 }),
     body('startDate').isISO8601(),
     async (req, res) => {
         try {
-            // Validate input
             const errors = validationResult(req);
             if (!errors.isEmpty()) {
                 return res.status(400).json({ errors: errors.array() });
@@ -170,131 +193,83 @@ app.post('/api/bookings',
                 totalPlaces
             } = req.body;
 
-            // Validate packages
-            if (!packages || packages.length === 0) {
+            if (!packages?.length) {
                 return res.status(400).json({ message: 'No packages selected' });
             }
 
-            // Generate itinerary HTML
-            let itineraryHTML = '<h3>Selected Packages:</h3><ul>';
-            packages.forEach((pkg, index) => {
-                itineraryHTML += `<li><strong>${pkg.name}</strong> (${pkg.area}) - ${pkg.duration} days</li>`;
-            });
-            itineraryHTML += '</ul>';
+            // Extract package names
+            const packageNames = Array.isArray(packages) 
+                ? packages.map(p => typeof p === 'string' ? p : p.name).join(', ')
+                : packages;
 
-            // Create email content for owner
-            const ownerEmailContent = `
-                <h2>New Travel Booking Request</h2>
-                
-                <h3>Customer Information:</h3>
-                <p><strong>Name:</strong> ${name}</p>
-                <p><strong>Email:</strong> ${email}</p>
-                <p><strong>Phone:</strong> ${phone}</p>
-                <p><strong>Number of Travelers:</strong> ${travelers}</p>
-                <p><strong>Preferred Start Date:</strong> ${new Date(startDate).toLocaleDateString()}</p>
-                
-                <h3>Trip Summary:</h3>
-                <p><strong>Total Days:</strong> ${totalDays}</p>
-                <p><strong>Total Destinations:</strong> ${totalPlaces}</p>
-                <p><strong>Total Experiences:</strong> ${totalExperiences}</p>
-                
-                <h3>Packages Selected:</h3>
-                <table style="border-collapse: collapse; width: 100%;">
-                    <tr style="background-color: #f0f0f0;">
-                        <th style="border: 1px solid #ddd; padding: 10px; text-align: left;">Package</th>
-                        <th style="border: 1px solid #ddd; padding: 10px; text-align: left;">Area</th>
-                        <th style="border: 1px solid #ddd; padding: 10px; text-align: left;">Duration</th>
-                        <th style="border: 1px solid #ddd; padding: 10px; text-align: left;">Places</th>
-                        <th style="border: 1px solid #ddd; padding: 10px; text-align: left;">Experiences</th>
-                    </tr>
-                    ${packages.map(pkg => `
-                        <tr>
-                            <td style="border: 1px solid #ddd; padding: 10px;">${pkg.name}</td>
-                            <td style="border: 1px solid #ddd; padding: 10px;">${pkg.area}</td>
-                            <td style="border: 1px solid #ddd; padding: 10px;">${pkg.duration} days</td>
-                            <td style="border: 1px solid #ddd; padding: 10px;">${pkg.places.join(', ')}</td>
-                            <td style="border: 1px solid #ddd; padding: 10px;">${pkg.experiences.join(', ')}</td>
-                        </tr>
-                    `).join('')}
-                </table>
-                
-                ${specialRequests ? `<h3>Special Requests:</h3><p>${specialRequests}</p>` : ''}
-                
-                <hr>
-                <p><strong>Submitted on:</strong> ${new Date().toLocaleString()}</p>
-            `;
+            console.log('Processing booking for:', name, 'with packages:', packageNames);
 
-            // Email to owner
+            // Send email to owner
             const ownerMailOptions = {
                 from: process.env.EMAIL_USER,
-                to: process.env.OWNER_EMAIL || 'owner@ceyloncanary.com',
-                subject: `New Booking Request from ${name}`,
-                html: ownerEmailContent
+                to: process.env.EMAIL_USER,
+                subject: `New Booking from ${name}`,
+                html: `
+                    <h2>New Booking Received</h2>
+                    <p><strong>Name:</strong> ${name}</p>
+                    <p><strong>Email:</strong> ${email}</p>
+                    <p><strong>Phone:</strong> ${phone}</p>
+                    <p><strong>Number of Travelers:</strong> ${travelers}</p>
+                    <p><strong>Start Date:</strong> ${startDate}</p>
+                    <p><strong>Packages:</strong> ${packageNames}</p>
+                    <p><strong>Special Requests:</strong> ${specialRequests || 'None'}</p>
+                    <hr>
+                    <p>Please respond to the customer as soon as possible.</p>
+                `
             };
 
-            // Confirmation email to customer
-            const customerEmailContent = `
-                <h2>Thank You for Your Booking Request!</h2>
-                
-                <p>Dear ${name},</p>
-                
-                <p>We have received your multi-day travel package request. Our team will review your preferences and contact you shortly with personalized recommendations and pricing.</p>
-                
-                <h3>Your Trip Details:</h3>
-                <ul>
-                    <li><strong>Total Days:</strong> ${totalDays}</li>
-                    <li><strong>Start Date:</strong> ${new Date(startDate).toLocaleDateString()}</li>
-                    <li><strong>Number of Travelers:</strong> ${travelers}</li>
-                </ul>
-                
-                <h3>Your Selected Packages:</h3>
-                <ul>
-                    ${packages.map(pkg => `<li>${pkg.name} (${pkg.area})</li>`).join('')}
-                </ul>
-                
-                <p><strong>Contact Information:</strong></p>
-                <p>Email: ${process.env.CONTACT_EMAIL}</p>
-                <p>Phone: ${process.env.CONTACT_PHONE}</p>
-                
-                <p>We look forward to creating an unforgettable experience for you in Sri Lanka!</p>
-                
-                <p>Best regards,<br>Ceylon Canary Team</p>
-            `;
-
+            // Send confirmation email to customer
             const customerMailOptions = {
                 from: process.env.EMAIL_USER,
                 to: email,
-                subject: 'Your Ceylon Canary Booking Request Received!',
-                html: customerEmailContent
+                subject: 'Booking Received - Ceylon Canary Tours',
+                html: `
+                    <h2>Thank You, ${name}!</h2>
+                    <p>We have received your booking request with the following details:</p>
+                    <p><strong>Number of Travelers:</strong> ${travelers}</p>
+                    <p><strong>Start Date:</strong> ${startDate}</p>
+                    <p><strong>Packages:</strong> ${packageNames}</p>
+                    <hr>
+                    <p>We will review your request and contact you shortly to confirm your booking.</p>
+                    <p>Best regards,<br/>Ceylon Canary Tours Team</p>
+                `
             };
 
-            // Send emails
-            await transporter.sendMail(ownerMailOptions);
-            await transporter.sendMail(customerMailOptions);
+            try {
+                const ownerResult = await transporter.sendMail(ownerMailOptions);
+                console.log('Owner email sent:', ownerResult.messageId);
+                
+                const customerResult = await transporter.sendMail(customerMailOptions);
+                console.log('Customer email sent:', customerResult.messageId);
+            } catch (emailErr) {
+                console.error('Email sending failed:', emailErr.message);
+                return res.status(500).json({ message: 'Failed to send booking confirmation emails' });
+            }
 
-            res.json({
-                success: true,
-                message: 'Booking request received. Emails sent successfully.'
-            });
+            res.json({ success: true });
 
-        } catch (error) {
-            console.error('Error processing booking:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Error processing booking request'
-            });
+        } catch (err) {
+            console.error(err);
+            res.status(500).json({ message: 'Booking failed' });
         }
     }
 );
 
-// Contact form submission
+/* =========================================
+   CONTACT ROUTE
+========================================= */
+
 app.post('/api/contact',
-    body('name').notEmpty().trim(),
+    body('name').notEmpty(),
     body('email').isEmail(),
-    body('message').notEmpty().trim(),
+    body('message').notEmpty(),
     async (req, res) => {
         try {
-            // Validate input
             const errors = validationResult(req);
             if (!errors.isEmpty()) {
                 return res.status(400).json({ errors: errors.array() });
@@ -302,64 +277,60 @@ app.post('/api/contact',
 
             const { name, email, message } = req.body;
 
-            // Email to owner
+            console.log('Processing contact form from:', name);
+
+            // Send email to owner
             const ownerMailOptions = {
                 from: process.env.EMAIL_USER,
-                to: process.env.OWNER_EMAIL || 'owner@ceyloncanary.com',
-                subject: `New Contact Form Message from ${name}`,
+                to: process.env.EMAIL_USER,
+                subject: `New Contact Message from ${name}`,
                 html: `
-                    <h2>New Message from Website Contact Form</h2>
+                    <h2>New Contact Form Submission</h2>
                     <p><strong>Name:</strong> ${name}</p>
                     <p><strong>Email:</strong> ${email}</p>
+                    <hr>
                     <h3>Message:</h3>
-                    <p>${message}</p>
-                    <p><strong>Submitted on:</strong> ${new Date().toLocaleString()}</p>
+                    <p>${message.replace(/\n/g, '<br>')}</p>
                 `
             };
 
-            // Confirmation to sender
-            const senderMailOptions = {
+            // Send confirmation email to customer
+            const customerMailOptions = {
                 from: process.env.EMAIL_USER,
                 to: email,
-                subject: 'We received your message - Ceylon Canary',
+                subject: 'We Received Your Message - Ceylon Canary Tours',
                 html: `
-                    <h2>Thank You for Contacting Us!</h2>
-                    <p>Dear ${name},</p>
+                    <h2>Thank You, ${name}!</h2>
                     <p>We have received your message and will get back to you as soon as possible.</p>
-                    <p>Best regards,<br>Ceylon Canary Team</p>
+                    <hr>
+                    <p>Best regards,<br/>Ceylon Canary Tours Team</p>
                 `
             };
 
-            await transporter.sendMail(ownerMailOptions);
-            await transporter.sendMail(senderMailOptions);
+            try {
+                const ownerResult = await transporter.sendMail(ownerMailOptions);
+                console.log('Owner contact email sent:', ownerResult.messageId);
+                
+                const customerResult = await transporter.sendMail(customerMailOptions);
+                console.log('Customer contact confirmation email sent:', customerResult.messageId);
+            } catch (emailErr) {
+                console.error('Contact email sending failed:', emailErr.message);
+                return res.status(500).json({ message: 'Failed to send confirmation emails' });
+            }
 
-            res.json({
-                success: true,
-                message: 'Message sent successfully'
-            });
+            res.json({ success: true });
 
-        } catch (error) {
-            console.error('Error sending contact message:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Error sending message'
-            });
+        } catch (err) {
+            console.error(err);
+            res.status(500).json({ message: 'Message failed' });
         }
     }
 );
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).json({
-        success: false,
-        message: 'Something went wrong!'
-    });
-});
+/* =========================================
+   START SERVER
+========================================= */
 
-// Start server
-const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
-    console.log('Make sure to set up your .env file with email credentials');
 });
