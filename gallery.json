@@ -1,0 +1,34 @@
+[
+  {
+    "id": "c_1779425952179",
+    "title": "Whale watching",
+    "description": "",
+    "category": "Wildlife",
+    "image": "http://localhost:5000/uploads/1779425952164-548664398.jpg",
+    "date": "2026-05-22"
+  },
+  {
+    "id": "c_1779425552625",
+    "title": "Sigiriya",
+    "description": "",
+    "category": "Scenic Landscapes",
+    "image": "http://localhost:5000/uploads/1779425552583-449443323.jpg",
+    "date": "2026-05-22"
+  },
+  {
+    "id": "c_1779425309358",
+    "title": "Sigiriya",
+    "description": "",
+    "category": "Culture & Temples",
+    "image": "http://localhost:5000/uploads/1779425309341-444925994.jpg",
+    "date": "2026-05-22"
+  },
+  {
+    "id": "c_1779424758737",
+    "title": "Sigiriya",
+    "description": "Sigiri Paintings",
+    "category": "Culture & Temples",
+    "image": "http://localhost:5000/uploads/1779424758721-855478580.jpg",
+    "date": "2026-05-22"
+  }
+]
